@@ -1,0 +1,58 @@
+name: Manual Windows Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      kind:
+        type: choice
+        options: [stable, rc, daily, branch]
+        required: true
+      tag:        { type: string, required: true }
+      title:      { type: string, required: true }
+      sha:        { type: string, required: true }
+      version:    { type: string, required: true }
+      refspec:
+        description: "Fetch refspec for setup-build (same value prepare.sh emits)"
+        type: string
+        required: true
+      prerelease: { type: boolean, default: false }
+      nightly:    { type: boolean, default: true }
+      pgo:
+        type: choice
+        options: [none, both]
+        default: none
+      prev_tag:   { type: string, default: "" }
+      branch:     { type: string, default: "" }
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      sha: ${{ inputs.sha }}
+      version: ${{ inputs.version }}
+      refspec: ${{ inputs.refspec }}
+      tag: ${{ inputs.tag }}
+      release: ${{ inputs.kind == 'stable' || inputs.kind == 'rc' }}
+      nightly: ${{ inputs.nightly }}
+      pgo: ${{ inputs.pgo }}
+
+  release:
+    needs: windows
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    secrets:
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+    with:
+      kind: ${{ inputs.kind }}
+      tag: ${{ inputs.tag }}
+      title: ${{ inputs.title }}
+      prerelease: ${{ inputs.prerelease }}
+      sha: ${{ inputs.sha }}
+      prev_tag: ${{ inputs.prev_tag }}
+      branch: ${{ inputs.branch }}
