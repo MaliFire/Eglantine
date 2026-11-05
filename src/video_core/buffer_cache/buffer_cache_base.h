@@ -285,7 +285,7 @@ public:
     void UnbindGraphicsStorageBuffers(size_t stage);
 
     bool BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
-                                   bool is_written);
+                                   bool is_written, u32 indirect_offset = ~0U);
 
     void UnbindGraphicsTextureBuffers(size_t stage);
 
@@ -594,6 +594,54 @@ private:
     /// flush and rely on these downloads, e.g. collision meshes skinned by compute shaders.
     bool DownloadsAtFence(DAddr device_addr, u64 size) noexcept {
         return AsyncBufferDownloads() || memory_tracker.IsRegionPreflushable(device_addr, size);
+    }
+
+    /// Whether the range holds GPU-written data that no fence downloads (not Preflushable).
+    bool HasGpuWritesNotDownloadedAtFence(DAddr device_addr, u64 size) {
+        if (AsyncBufferDownloads()) {
+            return false;
+        }
+        bool found = false;
+        memory_tracker.ForEachDownloadRange(device_addr, size, false, [&](u64 start, u64 range_size) {
+            if (found) {
+                return;
+            }
+            u64 covered = 0;
+            memory_tracker.ForEachPreflushableRange(start, range_size, [&](u64 lower, u64 length) {
+                const u64 begin = (std::max)(lower, start);
+                const u64 end = (std::min)(lower + length, start + range_size);
+                covered += end > begin ? end - begin : 0;
+            });
+            found = covered < range_size;
+        });
+        return found;
+    }
+
+    /// A GPU write: queues its Preflushable parts for download at the next fence and traps reads
+    /// of the rest. Queuing the whole range when any page of it was Preflushable copied whole
+    /// written storage buffers (up to 8 MiB) back at every fence: ~5 GB/s in title 1's forest.
+    void QueueGpuWrite(DAddr device_addr, u64 size) {
+        if (AsyncBufferDownloads()) {
+            uncommitted_gpu_modified_ranges.Add(device_addr, size);
+            return;
+        }
+        const DAddr end = device_addr + size;
+        DAddr cursor = device_addr;
+        memory_tracker.ForEachPreflushableRange(device_addr, size, [&](DAddr start, u64 range_size) {
+            const DAddr lower = (std::max)(start, cursor);
+            const DAddr upper = (std::min)(start + range_size, end);
+            if (lower >= upper) {
+                return;
+            }
+            if (lower > cursor) {
+                ArmReadTraps(cursor, lower - cursor);
+            }
+            uncommitted_gpu_modified_ranges.Add(lower, upper - lower);
+            cursor = upper;
+        });
+        if (cursor < end) {
+            ArmReadTraps(cursor, end - cursor);
+        }
     }
 
     /// GPU writes that are not downloaded at fences: trap the guest CPU's next read of their
