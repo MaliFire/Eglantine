@@ -227,6 +227,19 @@ bool GpuSplit::WaitForSync() {
     return WaitFor(std::min(last_sync_position, write_position), DrainSite::ListSync);
 }
 
+bool GpuSplit::WaitForMemoryWrites(GPUVAddr address, u64 size, bool writers, DrainSite site) {
+    u64 target = last_unknown_write;
+    if (writers) {
+        target = std::max(target, last_writer_position);
+    }
+    const u64 first = address >> PendingPageBits;
+    const u64 last = (address + (size != 0 ? size : 1) - 1) >> PendingPageBits;
+    for (u64 page = first; page <= last; ++page) {
+        target = std::max(target, pending_writes[PendingSlot(page)]);
+    }
+    return WaitFor(std::min(target, write_position), site);
+}
+
 bool GpuSplit::WaitFor(u64 target, DrainSite site) {
     consumed_cache = consumed.load(std::memory_order_acquire);
     if (consumed_cache >= target) {
