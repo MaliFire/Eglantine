@@ -461,6 +461,8 @@ void DmaPusher::CallMethod(u32 argument) {
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            } else if (engine_type != Engines::EngineTypes::Maxwell3D) {
+                split.NoteUnknownWrite();
             }
         };
         if (split.Active()) {
@@ -520,6 +522,8 @@ void DmaPusher::CallMultiMethod(const u32* base_start, u32 num_methods) {
         SCOPE_EXIT {
             if (writer) {
                 split.NoteWriter();
+            } else if (engine_type != Engines::EngineTypes::Maxwell3D) {
+                split.NoteUnknownWrite();
             }
         };
         if (split.Active()) {

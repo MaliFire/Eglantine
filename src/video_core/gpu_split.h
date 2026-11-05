@@ -175,6 +175,27 @@ public:
     /// of it was still queued.
     bool WaitForSync();
 
+    /// An entry just sent may write guest memory at [address, address + size) (GPU addresses).
+    void NoteMemoryWrite(GPUVAddr address, u64 size) {
+        const u64 first = address >> PendingPageBits;
+        const u64 last = (address + (size != 0 ? size : 1) - 1) >> PendingPageBits;
+        if (last - first >= MaxPendingPages) {
+            last_unknown_write = write_position;
+            return;
+        }
+        for (u64 page = first; page <= last; ++page) {
+            pending_writes[PendingSlot(page)] = write_position;
+        }
+    }
+    /// An entry just sent may write guest memory anywhere.
+    void NoteUnknownWrite() {
+        last_unknown_write = write_position;
+    }
+    /// Waits until the back executed the work sent so far that may write [address, address +
+    /// size): the noted writes, and with `writers` the compute and copy work (NoteWriter).
+    /// Returns whether any of it was still queued.
+    bool WaitForMemoryWrites(GPUVAddr address, u64 size, bool writers, DrainSite site);
+
 private:
     enum class Kind : u64 {
         Wrap,   ///< The rest of the ring is unused: continue at its start
@@ -191,6 +212,13 @@ private:
     static constexpr size_t RingMask = RingWords - 1;
     static constexpr u32 MaxMultiWords = 8192;
     static constexpr size_t PublishEvery = 256;
+    static constexpr u64 PendingPageBits = 12;
+    static constexpr u64 MaxPendingPages = 16;
+    static constexpr size_t PendingSlots = size_t{1} << 14;
+
+    static size_t PendingSlot(u64 page) {
+        return static_cast<size_t>((page * 0x9E3779B97F4A7C15ULL) >> (64 - 14));
+    }
 
     template <typename Func>
     static void CallThunk(const u64* payload) {
@@ -234,6 +262,9 @@ private:
     u64 write_position{};
     u64 last_writer_position{};
     u64 last_sync_position{};
+    u64 last_unknown_write{};
+    /// Per hashed page, the write position after the last entry that may write it.
+    std::array<u64, PendingSlots> pending_writes{};
     u64 published_local{};
     u64 consumed_cache{};
     /// Words between publishes: small right after a drain, while the back has nothing to do.
